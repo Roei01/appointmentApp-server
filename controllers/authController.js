@@ -71,12 +71,59 @@ exports.verifyCode = async (req, res) => {
 };
 
 exports.login = async (req, res) => {
-  const { username, password } = req.body;
-  const user = await User.findOne({ username });
-  if (!user || !(await bcrypt.compare(password, user.password))) {
-    return res.status(400).json({ success: false, message: 'Invalid username or password' });
+  const { email, password, loginWithEmailOnly } = req.body;
+
+  const user = await User.findOne({ email });
+  if (!user) {
+    return res.status(400).json({ success: false, message: 'Invalid email' });
+  }
+
+  // אם המשתמש בוחר התחברות עם מייל בלבד, לא נדרוש סיסמה
+  if (!loginWithEmailOnly && !(await bcrypt.compare(password, user.password))) {
+    return res.status(400).json({ success: false, message: 'Invalid password' });
   }
 
   const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '1h' });
   res.json({ success: true, token, message: 'Login successful' });
 };
+
+exports.requestMagicLink = async (req, res) => {
+  const { email } = req.body;
+
+  let user = await User.findOne({ email });
+  
+  // אם המשתמש לא קיים, צור אותו (למקרה שאין רישום)
+  if (!user) {
+    user = new User({ email });
+    await user.save();
+  }
+
+  // יצירת טוקן עבור ה-Magic Link
+  const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '15m' });
+
+  const magicLinkUrl = `http://yourapp.com/magic-link?token=${token}`; // קישור magic-link בצד הלקוח
+
+  // שליחת מייל
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+  });
+
+  const mailOptions = {
+    from: process.env.EMAIL_USER,
+    to: email,
+    subject: 'Your Magic Link for Login',
+    text: `Click the following link to login: ${magicLinkUrl}`,
+  };
+
+  transporter.sendMail(mailOptions, (err, info) => {
+    if (err) {
+      console.error('Error sending email:', err);
+      return res.status(500).json({ success: false, message: 'Failed to send magic link' });
+    }
+    res.json({ success: true, message: 'Magic link sent successfully' });
+  });
+};  
